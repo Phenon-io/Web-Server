@@ -1,134 +1,138 @@
-const port = 3000 || process.env.PORT;
-const socket = io(`https://musical-doodle-r449vq99rqrxf5954-${port}.app.github.dev/`);
+// (nw, 7/12/25)---
+//const port = process.env.PORT || 3000;
+// changed check priority to match server.js. Variable truthyness always needs to be checked first, 3000 is always true.
+// (nw)---
 
-socket.on("connect", () => {
-    console.log(`Client connecting with socket id:${socket.id}`);
-    socket.emit("identify", crypto.randomUUID());
-});
+// (nw)--- Pulls socket from current window URL
+const socket = io(window.location.origin);
 
-let canJoin = true
-let disconnectMessage;
-socket.on("connectionDenied", (message) => {
-    canJoin = false;
-    disconnectMessage = message;
-});
- 
-async function getUsers()
-{
-    const url = `https://musical-doodle-r449vq99rqrxf5954-${port}.app.github.dev/api/users`;
+//clientside user info (GET)
+async function getUsersOnline() {
+    try {
+        const res = await fetch(`${window.location.origin}/api/users`);
+        if (!res.ok) throw new Error("Failed to fetch users");
 
-    try
-    {
-        const response = await fetch(url);
-
-        if (!response.ok)
-        {
-            throw new Error(`Response status: ${response.status}`);
-        }
-
-        const json = await response.json();
-        return json.usersOnline;
-    }
-    catch (error)
-    {
-        console.error(error.message);
+        const data = await res.json();
+        return data.usersOnline;
+    } catch (err) {
+        console.error("getUsersOnline failed:", err);
         return [];
     }
 }
 
-async function isBtnDisabled()
-{
-    const url = `https://musical-doodle-r449vq99rqrxf5954-${port}.app.github.dev/api/data?socketId=${socket.id}`;
-
-    try
-    {
-        const response = await fetch(url);
-
-        if (!response.ok)
-        {
-            throw new Error(`Response status: ${response.status}`);
-        }
-
-        const json = await response.json();
-        return json.isDisabled;
-    }
-    catch (error)
-    {
-        console.error(error.message);
-        return true;
-    }
+// (nw)---
+// changed logic to operate off tokens per assignment 4 spec
+function setToken(name) {
+    const a = navigator.userAgent;
+    let agent = "Firefox";
+    if (a.indexOf("Safari") > 0) agent = "Safari";
+    if (a.indexOf("Chrome") > 0) agent = "Chrome";
+    if (a.indexOf("OPR") > 0) agent = "Opera";
+    return { user: name, browser: agent };
 }
 
-async function switchBtnState()
-{
-    const url = `https://musical-doodle-r449vq99rqrxf5954-${port}.app.github.dev/api/switchBtnState`;
-
-    try
-    {
-        const response = await fetch(url, {
+async function putToken(token) {
+    try {
+        const res = await fetch("/api/token", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            }
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(token)
         });
-
-        if (!response.ok)
-        {
-            throw new Error(`Response status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        console.log(result);
-    }
-    catch (error)
-    {
-        console.error(error.message);
+        return res.ok;
+    } catch (err) {
+        console.error("putToken() failed:", err);
+        return false;
     }
 }
 
-const divDisconnect = document.createElement("div");
-divDisconnect.className = "div-disconnect";
-document.body.append(divDisconnect);
-
-const targetFPS = 15;
-const msPerFrame = 1000 / targetFPS;
-let lastFrameTime = 0;
-let btn = document.getElementById("ping-btn");
-btn.disabled = true;
-
-async function mainLoop(currentTime)
-{
-    if (canJoin)
-    {
-        requestAnimationFrame(mainLoop);
-
-        const elapsed = currentTime - lastFrameTime;
-
-        if (elapsed >= msPerFrame)
-        {
-            btn.disabled = await isBtnDisabled();
-            
-            let usersOnline = await getUsers();
-            if (usersOnline.length < 2)
-            {
-                divDisconnect.innerHTML = "There are currently no users online to ping!";
-            }
-            else
-            {
-                divDisconnect.innerHTML = "";
-            }
-
-            lastFrameTime = currentTime - (elapsed % msPerFrame);
-        }
-    }
-    else
-    {
-        btn.style.visibility = "hidden";
-        divDisconnect.innerHTML = disconnectMessage;
+async function getToken() {
+    try {
+        const res = await fetch("/api/token");
+        return await res.json();
+    } catch (err) {
+        console.error("getToken() failed:", err);
+        return null;
     }
 }
-requestAnimationFrame(mainLoop);
 
-document.querySelector("#ping-btn").addEventListener("click", () => {
-    switchBtnState();
+// (nw) token based ping logic
+// also wrapped in a window to confirm button load before input
+let userToken = null;
+window.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("ping-btn");
+    if (!btn) {
+        console.error("Ping button (#ping-btn) not found!");
+        return;
+    }
+
+    let message = document.getElementById("ping-message");
+    if (!message) {
+        message = document.createElement("div");
+        message.id = "ping-message";
+        message.style.marginTop = "30px";
+        message.style.fontWeight = "bold";
+        message.style.color = "green";
+        message.style.textAlign = "center";
+        message.style.fontSize = "16px"
+        btn.insertAdjacentElement("afterend", message);
+    }
+
+    userToken = setToken(crypto.randomUUID());
+    btn.disabled = true;
+    socket.on("connect", () => {
+        console.log("Connected to server via socket:", socket.id);
+        socket.emit("identify", userToken?.user || "anonymous");
+    });
+
+    // (nw) configures the app to act on polling rather than interrupt
+    async function polling() {
+        setInterval(async () => {
+            const token = await getToken();
+            if (!token) return;
+            console.log("Polled token:", token);
+
+            if (token.user !== userToken.user || token.browser !== userToken.browser) {
+            console.log("Token differs, enabling ping button");
+            btn.disabled = false;
+            }
+        }, 1000);
+    }
+
+    btn.addEventListener("click", async () => {
+        btn.disabled = true;
+
+        const users = await getUsersOnline();
+        const otherUser = users.find(u => u !== userToken.user);
+        if (!otherUser) return;
+
+        // Update token and pass turn to other player
+        await putToken({
+            ...userToken
+        });
+    });
+
+    let lastToken = null;
+
+    setInterval(async () => {
+        const usersOnline = await getUsersOnline();
+        if (usersOnline.length !== 2) {
+            btn.disabled = true;
+            message.textContent = "Waiting for another user...";
+            return;
+        }
+
+        const serverToken = await getToken();
+        if (!serverToken) return;
+
+        if (serverToken.user === userToken.user) {
+            // It's my token — waiting for other to ping
+            btn.disabled = true;
+            message.textContent = "";
+        } else {
+            // Token differs — other user just pinged, enable button to reply
+            btn.disabled = false;
+            message.textContent = "Ping received!";
+            setTimeout(() => { message.textContent = ""; }, 2000);
+        }
+    }, 1000);
 });

@@ -23,7 +23,9 @@ body
 
 #ping-btn
 {
-    padding: 0;
+    flex:column;
+    gap:8;
+    padding: 8;
     display: block;
     margin: auto;
     margin-top: 25vh;
